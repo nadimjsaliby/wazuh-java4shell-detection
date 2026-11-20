@@ -50,10 +50,10 @@
   <!-- Keys on HotSpot-internal symbols that only appear in a JVM crash dump.
        HIGH confidence, but it only fires on the SYNCHRONOUS crash variant, where the
        out-of-bounds store faults immediately inside the decode stub. Live-lab finding
-       (Temurin 21.0.5, EPYC Genoa): the overflow frequently does NOT fault in the stub.
-       It corrupts an adjacent heap object and the JVM dies later in GC, with a crash
-       stack full of GC internals (DefNewGeneration::copy_to_survivor_space, ObjArrayKlass
-       iteration) and NO Base64 frame. This rule does not fire on that case; 100522 does. -->
+       (Temurin 21.0.5, EPYC Genoa): the overflow did NOT fault in the stub in any run.
+       It corrupts adjacent heap memory and the JVM dies somewhere else, a little later:
+       in GC in one run (DefNewGeneration::copy_to_survivor_space), in JIT-compiled
+       application code in another. NO decode-intrinsic frame in either stack. This rule does not fire on that case; 100522 does. -->
   <rule id="100521" level="13">
     <regex type="pcre2">base64_decodeBlock|StubRoutines::.{0,40}base64</regex>
     <description>Java4Shell (CVE-2026-114938): JVM crash stack references the Base64 decode intrinsic. Treat as an exploitation attempt.</description>

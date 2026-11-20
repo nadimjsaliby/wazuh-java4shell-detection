@@ -8,20 +8,21 @@ Companion repo to the post **"Java4Shell on Wazuh"** on blog.nadimjsaliby.com.
 
 At the time of writing there is no public Wazuh ruleset for this CVE. Network, Sigma and
 ModSecurity rules exist (see Credits); this fills the Wazuh gap: agent-side exposure
-inventory, the JVM crash-stack signal, a malformed-token heuristic, and post-exploitation
-process behavior.
+inventory, the JVM crash signal, a malformed-token check, and post-exploitation process
+behavior.
 
 ---
 
 ## ⚠️ Scope and safety
 
-- **Authorized lab use only.** The `lab/` and `exploit/` material reproduces a real memory
-  corruption bug. Run it only in an isolated environment you own or are authorized to test.
+- **Authorized lab use only.** The `lab/` and `poc/` material reproduces a real memory
+  corruption bug. It crashes a JVM; it contains no code-execution exploit. Run it only in
+  an isolated environment you own or are authorized to test.
 - **Hardware gate.** The overflow only triggers on **x86-64 CPUs with AVX-512 VBMI**
   (Intel Ice Lake or newer, AMD Zen 4 or newer). On ARM (Apple silicon, AWS Graviton) or
   older x86 the bug cannot fire, and the lab can only validate the non-crash layers.
-- **Isolation.** The lab binds all ports to `127.0.0.1`, runs on a dedicated bridge
-  network, and caps container memory and CPU so a crashing JVM cannot disturb the host.
+- **Isolation.** The lab publishes no ports, runs on a dedicated bridge network, and
+  caps container memory and CPU so a crashing JVM cannot disturb the host.
 - **Teardown.** `lab/teardown.sh` removes every container, volume and the lab network.
   Run it when you are done.
 
@@ -32,31 +33,33 @@ process behavior.
 ```
 rules/
   decoders/java4shell_decoders.xml   # decodes the exposure-scan output
-  rules/java4shell_rules.xml         # rules 100510-100531 (four detection layers)
+  rules/java4shell_rules.xml         # rules 100510-100530 (four detection layers)
 scanner/
   java4shell-check.sh                # agent-side exposure inventory (version + CPU)
 poc/
-  Base64Trigger.java                 # contained trigger that crashes a vulnerable JVM
-  run.sh                             # compile and run with a collected error file
+  Base64Crash.java                   # heap-pressure reproducer that crashes a vulnerable JVM
+  Base64Trigger.java                 # bare trigger loop; does the bad write, rarely crashes
+  run.sh                             # compile and run either one outside the lab
 lab/
-  docker-compose.yml                 # target app + attacker + wazuh, capped and localhost-bound
-  vulnerable-jdk/Dockerfile          # pins a known-affected JDK build
-  wazuh/                             # agent config and rule/decoder mounts
-  teardown.sh                        # stop and remove everything the lab starts
-exploit/                             # phased, lab-only walkthrough (uses public MIT components)
-docs/
-  attack-surface-map.md              # where untrusted Base64 reaches the decoder
-  detection-mapping.md               # attack phase -> which rule fires
+  docker-compose.yml                 # endpoint (JDK + agent) and manager, capped, no host ports
+  endpoint/                          # image for the vulnerable JDK with a Wazuh agent
+  samples/                           # sample proxy lines and scan verdict lines
+  setup.sh, crash.sh, replay-tokens.sh, alerts.sh, logtest-samples.sh, teardown.sh
 ```
 
 ## Detection layers
 
-| Rule IDs | Layer | Signal | Fidelity |
+| Rule IDs | Layer | Signal | Lab status |
 |---|---|---|---|
-| 100510-100513 | Exposure inventory | Affected build on an AVX-512 VBMI host | Pre-attack |
-| 100520-100521 | JVM crash | SIGSEGV with a Base64 frame in the stack | Highest |
-| 100525 | Wire signature | Malformed Base64 in an Authorization value | Opportunistic |
-| 100530-100531 | Post-exploitation | `java` spawns a shell or download tool | Behavioral |
+| 100510-100513 | Exposure inventory | Affected build on an AVX-512 VBMI host | Fires via a live agent |
+| 100520, 100522 | JVM crash | Fatal error header and fatal-signal line of a crash report | Fires via a live agent on a real crash |
+| 100521 | JVM crash | Crash stack references the Base64 intrinsic | 0 hits on the real crash (see `lab/README.md`) |
+| 100525 | Wire signature | Base64 token with an invalid length in an Authorization value | Fires via a live agent on sample lines |
+| 100530 | Post-exploitation | `java` spawns a shell or download tool (Windows, Sysmon) | Not tested |
+
+There is no Linux post-exploitation rule. The `win.eventdata.*` fields only exist for
+Windows event channel events, so write that rule against the fields your own Linux
+process telemetry decodes to.
 
 ## Quickstart
 
@@ -69,27 +72,28 @@ chown wazuh:wazuh /var/ossec/etc/decoders/java4shell_decoders.xml /var/ossec/etc
 systemctl restart wazuh-manager
 ```
 
-**Run the exposure inventory (Wazuh agent):** see `scanner/README` for the `<localfile>`
-command block; the script is also runnable standalone for a one-off check.
+**Agent side:** `lab/endpoint/java4shell-agent.conf` has the `<localfile>` blocks for the
+exposure scan and the crash report. Read the note in it before collecting crash reports:
+tailing `hs_err_pid*.log` with a wildcard ships nothing.
 
 **Bring up the lab (AVX-512 VBMI x86-64 host only):**
 ```sh
-cd lab && ./setup.sh        # build and start, capped and localhost-bound
-# ... validate detections ...
+cd lab && ./setup.sh        # manager, rules, endpoint with an enrolled agent
+./replay-tokens.sh && ./crash.sh && ./alerts.sh
 ./teardown.sh               # remove everything
 ```
 
 ## Requirements
 
-- Wazuh 4.x manager and agent (validated on 4.x; adjust rule IDs if 100500s collide).
+- Wazuh 4.x manager and agent (validated on 4.9.2; adjust rule IDs if 100500s collide).
 - For the lab: an x86-64 AVX-512 VBMI host with Docker and `docker compose`.
 
 ## Credits
 
 - Vulnerability disclosed and named by **Calif** (CVE-2026-114938).
 - Network / Sigma / ModSecurity rules and a public exploit chain:
-  [`ikow/java4shell-poc`](https://github.com/ikow/java4shell-poc) (MIT). The `exploit/`
-  walkthrough here reuses those public components rather than adding new offensive code.
+  [`ikow/java4shell-poc`](https://github.com/ikow/java4shell-poc) (MIT). Nothing from it is
+  included here; the PoCs in `poc/` are original and stop at a crash.
 
 ## License
 

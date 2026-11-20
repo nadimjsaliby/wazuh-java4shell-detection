@@ -4,7 +4,7 @@
 is affected by CVE-2026-114938, checks the CPU for AVX-512 VBMI, and prints a verdict line:
 
 ```
-JAVA4SHELL_SCAN verdict=EXPOSED version=21.0.5 line=21 cpu_avx512vbmi=yes bin=/opt/java/bin/java
+JAVA4SHELL_SCAN verdict=EXPOSED version=21.0.5 line=21 cpu_avx512vbmi=yes bin=/opt/java/openjdk/bin/java
 ```
 
 Verdicts: `EXPOSED` (affected build + AVX-512 VBMI CPU, patch now), `AFFECTED` (affected
@@ -17,8 +17,8 @@ build, CPU not capable), `AFFECTED_NOFIX` (affected line with no fixed build),
 install -m 750 java4shell-check.sh /var/ossec/active-response/bin/java4shell-check.sh
 ```
 
-Add the `<localfile>` command block from the script header to the agent `ossec.conf`, then
-restart the agent. Pair with the decoder and rules in `../rules/` on the manager.
+Add the Layer 1 `<localfile>` command block from `../lab/endpoint/java4shell-agent.conf` to
+the agent `ossec.conf`, then restart the agent. Pair with the decoder and rules in `../rules/` on the manager.
 
 ## One-off
 

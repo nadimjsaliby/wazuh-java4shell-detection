@@ -1,0 +1,4 @@
+JAVA4SHELL_SCAN verdict=EXPOSED version=17.0.19 line=17 cpu_avx512vbmi=yes bin=/usr/lib/jvm/temurin-17/bin/java
+JAVA4SHELL_SCAN verdict=AFFECTED version=21.0.5 line=21 cpu_avx512vbmi=no bin=/usr/lib/jvm/jdk-21/bin/java
+JAVA4SHELL_SCAN verdict=AFFECTED_NOFIX version=20.0.1 line=20 cpu_avx512vbmi=yes bin=/opt/legacy/jdk-20/bin/java
+JAVA4SHELL_SCAN verdict=FIXED version=21.0.13.1 line=21 cpu_avx512vbmi=yes bin=/usr/lib/jvm/jdk-21/bin/java

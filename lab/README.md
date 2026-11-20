@@ -1,53 +1,81 @@
 # Java4Shell lab
 
-A small, isolated lab to validate the detection pack against a real crash and, during the
-exploit walkthrough, a real target application.
+A small, isolated lab that runs three of the four detection layers end to end: a
+vulnerable JVM, a Wazuh agent on the same box, and a Wazuh manager.
 
 ## ⚠️ Run only here
 
 - An **x86-64 host with AVX-512 VBMI** (Intel Ice Lake+ / AMD Zen 4+). Without it the
-  overflow cannot fire; `setup.sh` warns and you can only exercise Layers 1, 3 and 4.
-- Everything binds to `127.0.0.1`, runs on a dedicated bridge network, and is memory- and
-  CPU-capped so a crashing JVM cannot disturb a host that also runs other work.
-- Run `teardown.sh` when done. It removes every container, volume and the network.
+  overflow cannot fire; `setup.sh` warns, Layer 1 reports `AFFECTED` and the crash will
+  not reproduce.
+- Nothing is published to the host. Both containers sit on a dedicated bridge network
+  and are memory- and CPU-capped so a crashing JVM cannot disturb other work.
+- Run `teardown.sh` when done. It removes the containers, the volume and the network.
 
 ## Pieces
 
-| Service | Role | Caps |
+| Container | Role | Caps |
 |---|---|---|
-| `j4s-target` | Vulnerable JDK hosting the trigger (or a real app for the walkthrough) | 1g / 2 cpu |
-| `j4s-agent` | Wazuh agent: tails `hs_err` files, runs the exposure scan | 512m / 1 cpu |
-| `j4s-manager` | Wazuh manager: analysis engine, alerts to `alerts.json` | 2g / 2 cpu |
+| `j4s-target` | Eclipse Temurin 21.0.5 (affected) plus a Wazuh 4.9.2 agent, named `j4s-endpoint` | 1g / 2 cpu |
+| `j4s-manager` | Wazuh 4.9.2 manager; alerts in `/var/ossec/logs/alerts/alerts.json` | 2g / 2 cpu |
 
-Manager-only keeps RAM near 3 GB. For dashboard screenshots, add the Wazuh indexer and
-dashboard with an override file; that pushes RAM past 6 GB, so only do it where there is
-headroom.
+There is no indexer or dashboard, to keep the lab near 3 GB of RAM. For dashboard
+screenshots, run the official `wazuh-docker` single-node stack and install the two files
+from `../rules/` on its manager.
 
 ## Use
 
 ```sh
-./setup.sh                                   # build + start, capped, localhost-bound
-
-# Confirm the target is actually vulnerable:
-docker exec j4s-target sh -c 'java -version; grep -c avx512vbmi /proc/cpuinfo'
-
-# Fire the crash (pad 64 for JDK 21/25/27, 128 for JDK 17):
-docker exec j4s-target java -XX:ErrorFile=/var/log/jvm/hs_err_pid%p.log /opt/poc/Base64Trigger 64
-
-# Watch the detections fire:
-docker exec j4s-manager tail -f /var/ossec/logs/alerts/alerts.json
-
-./teardown.sh                                # remove everything
+./setup.sh              # manager up, rules installed, endpoint built and enrolled
+./alerts.sh             # Layer 1: rule 100511 within about 2 minutes, no action needed
+./replay-tokens.sh      # Layer 3: 3 sample proxy lines, expect 2 alerts from 100525
+./crash.sh              # Layer 2: crash the JVM, expect 100520 once and 100522 three times
+./alerts.sh
+./logtest-samples.sh    # the other Layer 1 verdicts, through wazuh-logtest
+./teardown.sh
 ```
+
+## What a run looks like
+
+Validated on an AMD EPYC Genoa host, Wazuh 4.9.2, one pass from a clean `setup.sh`:
+
+| Rule | Level | Alerts | Source |
+|---|---|---|---|
+| 100511 exposed | 12 | 1 per scan (every 2 minutes) | real scanner output, via the agent's `command` |
+| 100525 malformed token | 10 | 2 of 3 sample lines | sample JSON, via the agent |
+| 100520 fatal error header | 8 | 1 | real crash report, via the agent |
+| 100522 fatal signal | 11 | 3 | real crash report, via the agent |
+| 100521 Base64 frame in the stack | 13 | 0 | real crash report; see below |
+| 100512, 100513 | 7, 9 | `wazuh-logtest` only | sample lines |
+| 100530 java spawns a shell (Windows) | 12 | not tested | none |
+
+The crash reproduced on 4 of 4 runs of `crash.sh`, a few seconds in each time. It is still
+a race, so `crash.sh` is bounded to 100 seconds and can exit cleanly.
+
+## Three things the lab taught
+
+1. **The crash does not happen in the Base64 code.** The out-of-bounds write corrupts a
+   neighbouring heap object and the JVM dies later in the garbage collector
+   (`DefNewGeneration::copy_to_survivor_space`). There is no Base64 frame in the stack, so
+   rule 100521 stays silent and 100522 is the one that fires. 100522 fires on any hard JVM
+   crash, which is why it is level 11 and not an attack verdict.
+2. **Do not tail `hs_err_pid*.log` with a wildcard.** On Wazuh 4.9.2, logcollector starts
+   at the end of a file it discovers through a wildcard, with or without
+   `only-future-events`. A JVM writes `hs_err` once and never appends, so nothing is
+   shipped. The lab starts the JVM with `-XX:+ErrorFileToStderr` and tails the log that
+   already receives the service's stderr.
+3. **The agent container needs an init.** On first connect the manager tells the agent
+   to restart. Without an init to reap the stopped daemons, `wazuh-control restart` waits
+   forever on zombies and the agent never comes back. Compose sets `init: true`.
+
+The bare trigger loop (`Base64Trigger`) performs the bad write but did not crash the JVM
+even after about 118 million iterations. `Base64Crash` adds heap pressure (32 MB heap,
+serial collector, several threads, small live allocations around each decode) to turn the
+corruption into a fault.
 
 ## Choosing a vulnerable JDK
 
-Set `JDK_IMAGE` (build arg in `vulnerable-jdk/Dockerfile`) to a pre-fix build, then confirm
-with the scanner (`verdict=EXPOSED`). Fixed builds will not crash. Distribution numbering
-differs from Oracle's, so verify on the host rather than trusting a tag name.
-
-## Exploit walkthrough
-
-See `../exploit/` for the phased, lab-only walkthrough that swaps `j4s-target` for a real
-application (Keycloak / Jenkins) and maps each phase to the rule that catches it. It reuses
-the public MIT components from `ikow/java4shell-poc`.
+Set `JDK_IMAGE` (build arg in `endpoint/Dockerfile`) to a pre-fix build. Layer 1 then
+tells you whether the pair of build and CPU is `EXPOSED`. Fixed builds will not crash.
+Distribution numbering differs from Oracle's, so check on the host instead of trusting a
+tag name.

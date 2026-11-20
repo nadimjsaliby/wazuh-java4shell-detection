@@ -7,7 +7,7 @@
  * GC busy, so a corrupted object header crashes the collector. Tiny heap + SerialGC
  * for a tight, deterministic layout. Multiple worker threads to widen the window.
  *
- *   java -Xmx32m -XX:+UseSerialGC -XX:ErrorFile=/var/log/jvm/hs_err_pid%p.log Base64Crash
+ *   java -Xmx32m -XX:+UseSerialGC -XX:+ErrorFileToStderr Base64Crash 2>> service-stderr.log
  */
 import java.util.Base64;
 import java.util.ArrayList;

@@ -1,6 +1,6 @@
 <!--
   Java4Shell (CVE-2026-114938) - Wazuh rules
-  ID block: 100510-100531. Tune levels and IDs to your environment.
+  ID block: 100510-100530. Tune levels and IDs to your environment.
   Install to /var/ossec/etc/rules/ on the manager, then restart wazuh-manager.
 -->
 
@@ -41,7 +41,7 @@
 
 <group name="java4shell,cve_2026_114938,jvm_crash,">
 
-  <!-- Layer 2: JVM crash inside the Base64 decode path (highest fidelity) -->
+  <!-- Layer 2: JVM crash. 100520 marks the fatal-error header of a crash report. -->
   <rule id="100520" level="8">
     <match>A fatal error has been detected by the Java Runtime Environment</match>
     <description>JVM fatal error reported (crash).</description>
@@ -53,7 +53,7 @@
        (Temurin 21.0.5, EPYC Genoa): the overflow frequently does NOT fault in the stub.
        It corrupts an adjacent heap object and the JVM dies later in GC, with a crash
        stack full of GC internals (DefNewGeneration::copy_to_survivor_space, ObjArrayKlass
-       iteration) and NO Base64 frame. This rule does not fire on that case -- 100522 does. -->
+       iteration) and NO Base64 frame. This rule does not fire on that case; 100522 does. -->
   <rule id="100521" level="13">
     <regex type="pcre2">base64_decodeBlock|StubRoutines::.{0,40}base64</regex>
     <description>Java4Shell (CVE-2026-114938): JVM crash stack references the Base64 decode intrinsic. Treat as an exploitation attempt.</description>
@@ -78,12 +78,15 @@
 <group name="java4shell,cve_2026_114938,">
 
   <!-- Layer 3: malformed Base64 token on the wire (opportunistic).
-       Adapt decoded_as and field name to how your proxy or WAF logs the Authorization value.
-       A regex cannot verify "length not a multiple of 4"; compute that upstream for a clean signal. -->
+       Adapt decoded_as and the field name to how your proxy or WAF logs the Authorization
+       value. A valid Base64 value that ends in ONE "=" has a body of 4n+3 characters.
+       The trigger has a body of 4n, 4n+1 or 4n+2 characters before the single "=", so the
+       regex counts the body in groups of four and allows at most two leftovers. An
+       ordinary Basic credential ending in a single "=" does not match. -->
   <rule id="100525" level="10">
     <decoded_as>json</decoded_as>
-    <field name="authorization" type="pcre2">(?i)^(basic|bearer)\s+[A-Za-z0-9+/_-]{40,}[A-Za-z0-9+/_-]=\s*$</field>
-    <description>Java4Shell: malformed Base64 token (single trailing padding) in an Authorization value. Possible trigger.</description>
+    <field name="authorization" type="pcre2">(?i)^(basic|bearer)\s+(?:[A-Za-z0-9+/_-]{4}){10,}[A-Za-z0-9+/_-]{0,2}=\s*$</field>
+    <description>Java4Shell: malformed Base64 token (invalid length before a single trailing padding) in an Authorization value. Possible trigger.</description>
     <group>attack,</group>
   </rule>
 
@@ -91,8 +94,13 @@
 
 <group name="java4shell,cve_2026_114938,post_exploitation,">
 
-  <!-- Layer 4: java spawns a shell or download tool (Sysmon Event ID 1).
-       Baseline CI/build nodes (Jenkins, Gradle) before promoting; they spawn shells legitimately. -->
+  <!-- Layer 4: java spawns a shell or download tool. Windows, Sysmon Event ID 1.
+       NOT lab-validated. Baseline CI/build nodes (Jenkins, Gradle) before promoting;
+       they spawn shells legitimately.
+       There is deliberately no Linux rule: win.eventdata.* exists only for Windows
+       eventchannel events, so a Linux rule written against those fields never matches.
+       On Linux, write the same parent/child match against the fields your own process
+       telemetry decodes to (auditd or Sysmon for Linux) and prove it with wazuh-logtest. -->
   <rule id="100530" level="12">
     <if_group>sysmon_event1</if_group>
     <field name="win.eventdata.parentImage" type="pcre2">(?i)\\javaw?\.exe$</field>
@@ -102,13 +110,5 @@
     <group>attack,</group>
   </rule>
 
-  <rule id="100531" level="12">
-    <if_group>sysmon_event1</if_group>
-    <field name="win.eventdata.parentImage" type="pcre2">/java$</field>
-    <field name="win.eventdata.image" type="pcre2">/(sh|bash|dash|ksh|zsh|nc|ncat|curl|wget|python3?|perl)$</field>
-    <description>Java4Shell: java spawned $(win.eventdata.image). Possible post-exploitation command execution.</description>
-    <mitre><id>T1190</id><id>T1059</id></mitre>
-    <group>attack,</group>
-  </rule>
 
 </group>

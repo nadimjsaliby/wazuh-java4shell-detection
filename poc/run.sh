@@ -1,11 +1,18 @@
 #!/bin/sh
-# Compile and run the Java4Shell trigger with a collected JVM error file.
-# AUTHORIZED LAB USE ONLY. Usage: ./run.sh [pad]   (64 for JDK 21/25/27, 128 for JDK 17)
+# Compile and run a Java4Shell PoC outside the lab. The crash report goes to stderr
+# (-XX:+ErrorFileToStderr); redirect it to a log your Wazuh agent already tails.
+# AUTHORIZED LAB USE ONLY.
+#   ./run.sh crash          heap-pressure reproducer that actually crashes the JVM
+#   ./run.sh trigger [pad]  bare trigger loop (64 for JDK 21/25/27, 128 for JDK 17);
+#                           performs the bad write but usually does NOT crash
 set -e
 cd "$(dirname "$0")"
-mkdir -p /var/log/jvm 2>/dev/null || true
 echo "[*] JDK in use:"; java -version
-javac Base64Trigger.java
-PAD="${1:-64}"
-echo "[*] triggering with pad=$PAD ..."
-exec java -XX:ErrorFile=/var/log/jvm/hs_err_pid%p.log Base64Trigger "$PAD"
+ERR="-XX:+ErrorFileToStderr"
+case "${1:-crash}" in
+  crash)   javac Base64Crash.java
+           exec java -Xmx32m -XX:+UseSerialGC "$ERR" Base64Crash ;;
+  trigger) javac Base64Trigger.java
+           exec java "$ERR" Base64Trigger "${2:-64}" ;;
+  *)       echo "usage: $0 crash | trigger [pad]"; exit 2 ;;
+esac

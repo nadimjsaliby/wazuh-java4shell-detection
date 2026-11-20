@@ -1,0 +1,114 @@
+<!--
+  Java4Shell (CVE-2026-114938) - Wazuh rules
+  ID block: 100510-100531. Tune levels and IDs to your environment.
+  Install to /var/ossec/etc/rules/ on the manager, then restart wazuh-manager.
+-->
+
+<group name="java4shell,cve_2026_114938,">
+
+  <!-- Layer 1: exposure inventory (scanner/java4shell-check.sh).
+       Anchored on the decoded field, not <decoded_as>: the scanner runs as a
+       logcollector <command>, so the line arrives under the built-in `ossec`
+       parent decoder and our fields are added by a child. Keying on j4s_verdict
+       fires for both the wrapped (command) and bare (file / logtest) forms. -->
+  <rule id="100510" level="0">
+    <field name="j4s_verdict">\w+</field>
+    <description>Java4Shell exposure scan result.</description>
+  </rule>
+
+  <rule id="100511" level="12">
+    <if_sid>100510</if_sid>
+    <field name="j4s_verdict">^EXPOSED$</field>
+    <description>Java4Shell (CVE-2026-114938): Java $(j4s_line) at $(j4s_version) on an AVX-512 VBMI CPU ($(j4s_bin)). Patch and restart now.</description>
+    <group>vulnerability,</group>
+  </rule>
+
+  <rule id="100512" level="7">
+    <if_sid>100510</if_sid>
+    <field name="j4s_verdict">^AFFECTED$</field>
+    <description>Java4Shell: affected Java $(j4s_line) at $(j4s_version) found; CPU lacks AVX-512 VBMI. Patch on the next window.</description>
+    <group>vulnerability,</group>
+  </rule>
+
+  <rule id="100513" level="9">
+    <if_sid>100510</if_sid>
+    <field name="j4s_verdict">^AFFECTED_NOFIX$</field>
+    <description>Java4Shell: Java $(j4s_line) at $(j4s_version) is affected and has no fixed build. Move to a supported line.</description>
+    <group>vulnerability,</group>
+  </rule>
+
+</group>
+
+<group name="java4shell,cve_2026_114938,jvm_crash,">
+
+  <!-- Layer 2: JVM crash inside the Base64 decode path (highest fidelity) -->
+  <rule id="100520" level="8">
+    <match>A fatal error has been detected by the Java Runtime Environment</match>
+    <description>JVM fatal error reported (crash).</description>
+  </rule>
+
+  <!-- Keys on HotSpot-internal symbols that only appear in a JVM crash dump.
+       HIGH confidence, but it only fires on the SYNCHRONOUS crash variant, where the
+       out-of-bounds store faults immediately inside the decode stub. Live-lab finding
+       (Temurin 21.0.5, EPYC Genoa): the overflow frequently does NOT fault in the stub.
+       It corrupts an adjacent heap object and the JVM dies later in GC, with a crash
+       stack full of GC internals (DefNewGeneration::copy_to_survivor_space, ObjArrayKlass
+       iteration) and NO Base64 frame. This rule does not fire on that case -- 100522 does. -->
+  <rule id="100521" level="13">
+    <regex type="pcre2">base64_decodeBlock|StubRoutines::.{0,40}base64</regex>
+    <description>Java4Shell (CVE-2026-114938): JVM crash stack references the Base64 decode intrinsic. Treat as an exploitation attempt.</description>
+    <group>attack,</group>
+  </rule>
+
+  <!-- The realistic crash signature. The OOB write usually manifests as a delayed
+       heap-corruption crash: a JVM fatal SIGSEGV/SIGBUS with a program counter, the
+       distinctive hs_err header line "SIGSEGV (0xb) at pc=0x...". This fires on ANY
+       hard JVM crash, so it is level 11 (investigate), not an attack verdict on its own.
+       On a Base64-exposed service (Layer 1 EXPOSED) or alongside a malformed-token hit
+       (Layer 3), treat an unexplained SIGSEGV as possible Java4Shell heap corruption.
+       Validated: this is the rule that fires on the crash the lab actually reproduced. -->
+  <rule id="100522" level="11">
+    <regex type="pcre2">SIG(SEGV|BUS|ILL|FPE)\s+\(0x[0-9a-f]+\)\s+at pc=0x</regex>
+    <description>Java4Shell (CVE-2026-114938): JVM fatal signal in a crash dump (possible Base64 heap corruption). Correlate with exposure (Layer 1) and malformed tokens (Layer 3).</description>
+    <group>attack,</group>
+  </rule>
+
+</group>
+
+<group name="java4shell,cve_2026_114938,">
+
+  <!-- Layer 3: malformed Base64 token on the wire (opportunistic).
+       Adapt decoded_as and field name to how your proxy or WAF logs the Authorization value.
+       A regex cannot verify "length not a multiple of 4"; compute that upstream for a clean signal. -->
+  <rule id="100525" level="10">
+    <decoded_as>json</decoded_as>
+    <field name="authorization" type="pcre2">(?i)^(basic|bearer)\s+[A-Za-z0-9+/_-]{40,}[A-Za-z0-9+/_-]=\s*$</field>
+    <description>Java4Shell: malformed Base64 token (single trailing padding) in an Authorization value. Possible trigger.</description>
+    <group>attack,</group>
+  </rule>
+
+</group>
+
+<group name="java4shell,cve_2026_114938,post_exploitation,">
+
+  <!-- Layer 4: java spawns a shell or download tool (Sysmon Event ID 1).
+       Baseline CI/build nodes (Jenkins, Gradle) before promoting; they spawn shells legitimately. -->
+  <rule id="100530" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.parentImage" type="pcre2">(?i)\\javaw?\.exe$</field>
+    <field name="win.eventdata.image" type="pcre2">(?i)\\(cmd|powershell|pwsh|wscript|cscript|mshta|certutil|bitsadmin|curl)\.exe$</field>
+    <description>Java4Shell: java spawned $(win.eventdata.image). Possible post-exploitation command execution.</description>
+    <mitre><id>T1190</id><id>T1059</id></mitre>
+    <group>attack,</group>
+  </rule>
+
+  <rule id="100531" level="12">
+    <if_group>sysmon_event1</if_group>
+    <field name="win.eventdata.parentImage" type="pcre2">/java$</field>
+    <field name="win.eventdata.image" type="pcre2">/(sh|bash|dash|ksh|zsh|nc|ncat|curl|wget|python3?|perl)$</field>
+    <description>Java4Shell: java spawned $(win.eventdata.image). Possible post-exploitation command execution.</description>
+    <mitre><id>T1190</id><id>T1059</id></mitre>
+    <group>attack,</group>
+  </rule>
+
+</group>

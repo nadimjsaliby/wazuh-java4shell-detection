@@ -1,0 +1,29 @@
+<!--
+  Java4Shell (CVE-2026-114938) - Wazuh decoders
+  Decodes the output of scanner/java4shell-check.sh.
+  Install to /var/ossec/etc/decoders/ on the manager.
+
+  Two blocks, same name, on purpose. The scanner runs as a logcollector
+  <command>, so the manager actually receives the output wrapped:
+      ossec: output: 'java4shell-check': JAVA4SHELL_SCAN verdict=...
+  Pre-decoding sets program_name=ossec, the built-in `ossec` decoder claims
+  the line, and a plain top-level decoder never gets a turn (its rule would
+  need decoded_as=java4shell-scan, which never happens). So we attach a child
+  of `ossec` for the wrapped case, and keep a top-level block for a bare line
+  (standalone run, a tailed file, or `wazuh-logtest`).
+-->
+
+<!-- Wrapped: scanner output arriving as logcollector command output. -->
+<decoder name="java4shell-scan">
+  <parent>ossec</parent>
+  <prematch offset="after_parent">JAVA4SHELL_SCAN </prematch>
+  <regex type="pcre2">verdict=(\w+) version=(\S+) line=(\S+) cpu_avx512vbmi=(\w+) bin=(\S+)</regex>
+  <order>j4s_verdict, j4s_version, j4s_line, j4s_cpu, j4s_bin</order>
+</decoder>
+
+<!-- Bare: standalone run, a tailed log file, or wazuh-logtest input. -->
+<decoder name="java4shell-scan">
+  <prematch>JAVA4SHELL_SCAN </prematch>
+  <regex type="pcre2">verdict=(\w+) version=(\S+) line=(\S+) cpu_avx512vbmi=(\w+) bin=(\S+)</regex>
+  <order>j4s_verdict, j4s_version, j4s_line, j4s_cpu, j4s_bin</order>
+</decoder>

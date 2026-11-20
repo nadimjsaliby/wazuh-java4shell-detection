@@ -1,0 +1,67 @@
+# Java4Shell lab - isolated, capped, localhost-bound.
+# Bring up with ./setup.sh on an x86-64 AVX-512 VBMI host only.
+# Image versions and the exact agent config mount are finalized during validation.
+name: java4shell-lab
+
+networks:
+  j4s:
+    driver: bridge
+
+volumes:
+  jvm-logs:
+  manager-data:
+
+services:
+  # Vulnerable JVM target. For the exploit walkthrough, swap in a real app
+  # (Keycloak / Jenkins) built on the same vulnerable JDK; by default it hosts the trigger.
+  target:
+    build:
+      context: ..
+      dockerfile: lab/vulnerable-jdk/Dockerfile
+    container_name: j4s-target
+    networks: [j4s]
+    mem_limit: 1g
+    cpus: 2.0
+    volumes:
+      - jvm-logs:/var/log/jvm
+    # No published ports by default. The walkthrough binds to 127.0.0.1 only when needed.
+
+  # Wazuh agent: tails JVM error files and runs the exposure scan.
+  wazuh-agent:
+    image: wazuh/wazuh-agent:4.9.2
+    container_name: j4s-agent
+    networks: [j4s]
+    mem_limit: 512m
+    cpus: 1.0
+    environment:
+      - WAZUH_MANAGER=wazuh-manager
+    volumes:
+      - jvm-logs:/var/log/jvm:ro
+      - ../scanner/java4shell-check.sh:/var/ossec/active-response/bin/java4shell-check.sh:ro
+      - ./wazuh/java4shell-agent.conf:/opt/java4shell-agent.conf:ro
+    depends_on: [wazuh-manager]
+
+  # Wazuh manager only (no indexer/dashboard) to stay light on a shared host.
+  # Alerts land in /var/ossec/logs/alerts/alerts.json; add the indexer+dashboard
+  # override if you want dashboard screenshots.
+  wazuh-manager:
+    image: wazuh/wazuh-manager:4.9.2
+    container_name: j4s-manager
+    networks: [j4s]
+    mem_limit: 2g
+    cpus: 2.0
+    # No published host ports: the agent reaches the manager over the internal j4s
+    # network by service name. This keeps the lab from colliding with anything the
+    # host already runs on 1514/55000 (e.g. a production Wazuh stack) and makes it
+    # portable. Add 127.0.0.1-bound ports on free numbers only if you need external
+    # access for a one-off test.
+    #
+    # NOTE: do NOT bind-mount the decoder/rule files into /var/ossec/etc here. The
+    # manager image populates /var/ossec/etc (a declared volume) at first boot; mounting
+    # individual files into etc/decoders and etc/rules pre-creates those as empty
+    # mountpoints and breaks the entrypoint's config restore (ossec.conf and the stock
+    # decoders/rules go missing, and no daemon starts). setup.sh installs the custom
+    # files with `docker cp` after the manager is healthy -- the same copy-then-restart
+    # the post documents for a real deployment.
+    volumes:
+      - manager-data:/var/ossec/logs
